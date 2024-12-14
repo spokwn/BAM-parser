@@ -5,6 +5,7 @@
 void addGenericRule(const std::string& name, const std::string& rule) {
     genericRules.push_back({ name, rule });
 }
+
 void initializeGenericRules() {
   addGenericRule("Generic A", R"(
 import "pe"
@@ -67,6 +68,7 @@ rule sA
 
     // MAS
 }
+
 
 
 int yara_callback(YR_SCAN_CONTEXT* context, int message, void* message_data, void* user_data) {

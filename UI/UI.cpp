@@ -12,6 +12,11 @@ D3DPRESENT_PARAMETERS UI::g_d3dpp = {};
 HWND UI::hwnd = nullptr;
 WNDCLASSEX UI::wc = {};
 
+struct SelectedEntry {
+    BAMEntry entry;
+    bool isSelected = false;
+};
+
 bool UI::CreateDeviceD3D() {
     g_pD3D = Direct3DCreate9(D3D_SDK_VERSION);
     if (g_pD3D == nullptr) return false;
@@ -140,6 +145,8 @@ void UI::Render() {
     static bool showNotSignedOnly = false;
     static bool showFlaggedOnly = false;
     static bool showOnlyInstance = false;
+    static bool showDetailsPopup = false;
+    static BAMEntry selectedEntry;
 
     auto parseTime = [](const std::wstring& timeStr) -> std::chrono::system_clock::time_point {
         std::tm tm = {};
@@ -161,12 +168,12 @@ void UI::Render() {
         if (processingThread.joinable()) {
             processingThread.join();
         }
-        processingThread = std::thread([sortEntries] {
+        processingThread = std::thread([sortEntries, isProcessing_ptr = &isProcessing, entries_ptr = &entries]() {
             std::vector<BAMEntry> localEntries;
-            ProcessEntries(isProcessing, localEntries);
+            ProcessEntries(*isProcessing_ptr, localEntries);
             sortEntries(localEntries);
-            entries = std::move(localEntries);
-            isProcessing = false;
+            *entries_ptr = std::move(localEntries);
+            *isProcessing_ptr = false;
             });
     }
 
@@ -178,18 +185,63 @@ void UI::Render() {
         return;
     }
 
+    if (showDetailsPopup) {
+        ImGui::PushStyleColor(ImGuiCol_ModalWindowDimBg, ImVec4(0.0f, 0.0f, 0.0f, 0.6f));
+        ImGui::OpenPopup("Replace Details Modal");
+
+        ImVec2 center = ImGui::GetMainViewport()->GetCenter();
+        ImGui::SetNextWindowPos(center, ImGuiCond_Appearing, ImVec2(0.5f, 0.5f));
+        ImGui::SetNextWindowSize(ImVec2(800, 600));
+
+        if (ImGui::BeginPopupModal("Replace Details Modal", &showDetailsPopup,
+            ImGuiWindowFlags_NoResize |
+            ImGuiWindowFlags_NoMove |
+            ImGuiWindowFlags_NoSavedSettings)) {
+
+            ImGui::PushStyleVar(ImGuiStyleVar_WindowPadding, ImVec2(20, 20));
+
+            ImGui::Text("Replace Information:");
+            ImGui::Spacing();
+            ImGui::Spacing();
+
+            for (const auto& replace : selectedEntry.replace_results) {
+                ImGui::PushStyleColor(ImGuiCol_Text, ImVec4(1.0f, 0.0f, 0.0f, 1.0f));
+
+                ImGui::Text("Type:");
+                ImGui::SameLine();
+                ImGui::TextWrapped("%s", replace.replaceType.c_str());
+
+                ImGui::Spacing();
+
+                ImGui::Text("Details:");
+                ImGui::SameLine();
+                ImGui::TextWrapped("%s", replace.details.c_str());
+
+                ImGui::PopStyleColor();
+                ImGui::Separator();
+                ImGui::Spacing();
+            }
+            ImGui::PopStyleVar();
+            ImGui::EndPopup();
+        }
+
+        ImGui::PopStyleColor();
+    }
+
+
+
     if (ImGui::Button("Parse again", ImVec2(100, 30))) {
         entries.clear();
         isProcessing = true;
         if (processingThread.joinable()) {
             processingThread.join();
         }
-        processingThread = std::thread([sortEntries] {
+        processingThread = std::thread([sortEntries, isProcessing_ptr = &isProcessing, entries_ptr = &entries]() {
             std::vector<BAMEntry> localEntries;
-            ProcessEntries(isProcessing, localEntries);
+            ProcessEntries(*isProcessing_ptr, localEntries);
             sortEntries(localEntries);
-            entries = std::move(localEntries);
-            isProcessing = false;
+            *entries_ptr = std::move(localEntries);
+            *isProcessing_ptr = false;
             });
         return;
     }
@@ -239,78 +291,106 @@ void UI::Render() {
     signatureMaxWidth += 30;
     rulesMaxWidth += 30;
 
-    ImGui::Columns(4, "BAMColumns", true);
-    ImGui::SetColumnWidth(0, timeMaxWidth);
-    ImGui::SetColumnWidth(1, pathMaxWidth);
-    ImGui::SetColumnWidth(2, signatureMaxWidth);
-    ImGui::SetColumnWidth(3, rulesMaxWidth);
+    auto SelectableText = [&](const char* label, const char* text_to_copy, bool& clicked) {
+        ImGui::PushID(label);
+        bool selected = false;
+        ImGui::PushStyleColor(ImGuiCol_Header, ImVec4(0.2f, 0.2f, 0.2f, 0.5f));
+        ImGui::PushStyleColor(ImGuiCol_HeaderHovered, ImVec4(0.3f, 0.3f, 0.3f, 0.5f));
+        ImGui::PushStyleColor(ImGuiCol_HeaderActive, ImVec4(0.4f, 0.4f, 0.4f, 0.5f));
 
-    ImGui::PushStyleColor(ImGuiCol_Text, ImGui::GetColorU32(ImVec4(1.0f, 1.0f, 1.0f, 1.0f)));
-    ImGui::Text("Last Execution"); ImGui::NextColumn();
-    ImGui::Text("Filepath"); ImGui::NextColumn();
-    ImGui::Text("Signature"); ImGui::NextColumn();
-    ImGui::Text("Rules"); ImGui::NextColumn();
-    ImGui::PopStyleColor();
-
-    ImGui::Separator();
-
-    for (const auto& entry : entries) {
-        bool shouldShow = true;
-
-        std::string signature(entry.signatureStatus.begin(), entry.signatureStatus.end());
-        if (showNotSignedOnly && signature == "Signed") {
-            shouldShow = false;
-        }
-
-        if (showFlaggedOnly && entry.matched_rules.empty()) {
-            shouldShow = false;
-        }
-        if (showOnlyInstance && !entry.isInCurrentInstance) {
-            shouldShow = false;
-        }
-            
-        if (shouldShow) {
-            std::string time(entry.executionTime.begin(), entry.executionTime.end());
-            std::string path(entry.path.begin(), entry.path.end());
-
-            ImGui::Text("%s", time.c_str());
-            ImGui::NextColumn();
-
-            ImGui::Text("%s", path.c_str());
-            ImGui::NextColumn();
-
-            if (signature == "Signed") {
-                ImGui::PushStyleColor(ImGuiCol_Text, ImGui::GetColorU32(ImVec4(0.0f, 1.0f, 0.0f, 1.0f)));
+        if (ImGui::Selectable(label, &selected, ImGuiSelectableFlags_None)) {
+            if (ImGui::GetIO().KeyCtrl) {
+                ImGui::SetClipboardText(text_to_copy);
+                clicked = true;
             }
             else {
-                ImGui::PushStyleColor(ImGuiCol_Text, ImGui::GetColorU32(ImVec4(0.9f, 0.2f, 0.2f, 1.0f)));
+                clicked = true;
             }
-            ImGui::Text("%s", signature.c_str());
-            ImGui::PopStyleColor();
-            ImGui::NextColumn();
+        }
 
-            if (!entry.matched_rules.empty()) {
-                std::string rules;
-                for (size_t i = 0; i < entry.matched_rules.size(); i++) {
-                    rules += entry.matched_rules[i];
-                    if (i < entry.matched_rules.size() - 1) {
-                        rules += ", ";
-                    }
+        ImGui::PopStyleColor(3);
+        ImGui::PopID();
+        };
+
+    if (ImGui::BeginTable("BAMTable", 4, ImGuiTableFlags_Borders | ImGuiTableFlags_RowBg | ImGuiTableFlags_Resizable | ImGuiTableFlags_Reorderable)) {
+        ImGui::TableSetupColumn("Last Execution", ImGuiTableColumnFlags_None, timeMaxWidth);
+        ImGui::TableSetupColumn("Filepath", ImGuiTableColumnFlags_None, pathMaxWidth);
+        ImGui::TableSetupColumn("Signature", ImGuiTableColumnFlags_None, signatureMaxWidth);
+        ImGui::TableSetupColumn("Rules", ImGuiTableColumnFlags_None, rulesMaxWidth);
+        ImGui::TableHeadersRow();
+
+        for (const auto& entry : entries) {
+            bool shouldShow = true;
+
+            std::string signature(entry.signatureStatus.begin(), entry.signatureStatus.end());
+            if (showNotSignedOnly && signature == "Signed") {
+                shouldShow = false;
+            }
+
+            if (showFlaggedOnly && entry.matched_rules.empty()) {
+                shouldShow = false;
+            }
+            if (showOnlyInstance && !entry.isInCurrentInstance) {
+                shouldShow = false;
+            }
+
+            if (shouldShow) {
+                std::string time(entry.executionTime.begin(), entry.executionTime.end());
+                std::string path(entry.path.begin(), entry.path.end());
+
+                ImGui::TableNextRow();
+                bool clicked = false;
+
+                ImGui::TableNextColumn();
+                SelectableText(time.c_str(), time.c_str(), clicked);
+
+                ImGui::TableNextColumn();
+                if (!entry.replace_results.empty()) {
+                    ImGui::PushStyleColor(ImGuiCol_Text, ImVec4(1.0f, 0.0f, 0.0f, 1.0f));
                 }
-                ImGui::PushStyleColor(ImGuiCol_Text, ImGui::GetColorU32(ImVec4(1.0f, 0.0f, 0.0f, 1.0f)));
-                ImGui::Text("%s", rules.c_str());
+                SelectableText(path.c_str(), path.c_str(), clicked);
+                if (!entry.replace_results.empty()) {
+                    ImGui::PopStyleColor();
+                }
+
+                if (clicked && !ImGui::GetIO().KeyCtrl && !entry.replace_results.empty()) {
+                    selectedEntry = entry;
+                    showDetailsPopup = true;
+                }
+
+                ImGui::TableNextColumn();
+                if (signature == "Signed") {
+                    ImGui::PushStyleColor(ImGuiCol_Text, ImVec4(0.0f, 1.0f, 0.0f, 1.0f));
+                }
+                else {
+                    ImGui::PushStyleColor(ImGuiCol_Text, ImVec4(0.9f, 0.2f, 0.2f, 1.0f));
+                }
+                SelectableText(signature.c_str(), signature.c_str(), clicked);
                 ImGui::PopStyleColor();
+
+                ImGui::TableNextColumn();
+                if (!entry.matched_rules.empty()) {
+                    std::string rules;
+                    for (size_t i = 0; i < entry.matched_rules.size(); i++) {
+                        rules += entry.matched_rules[i];
+                        if (i < entry.matched_rules.size() - 1) {
+                            rules += ", ";
+                        }
+                    }
+                    ImGui::PushStyleColor(ImGuiCol_Text, ImVec4(1.0f, 0.0f, 0.0f, 1.0f));
+                    SelectableText(rules.c_str(), rules.c_str(), clicked);
+                    ImGui::PopStyleColor();
+                }
+                else {
+                    SelectableText("-", "-", clicked);
+                }
             }
-            else {
-                ImGui::Text("-");
-            }
-            ImGui::NextColumn();
         }
+
+        ImGui::EndTable();
     }
 
-    ImGui::Columns(1);
 }
-
 
 void UI::EndFrame() {
     ImGui::EndFrame();

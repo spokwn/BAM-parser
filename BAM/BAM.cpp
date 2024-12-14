@@ -1,16 +1,106 @@
-#include "BAM.h"
+#include "bam.h"
 #include <iostream>
 #include <iomanip>
 #include <sstream>
+#include <locale>
+#include <codecvt>
+#include <fstream>
 #include "../yara/yara.h"
 
 std::vector<GenericRule> genericRules;
 
-std::string BAMParser::wstringToString(const std::wstring& wstr) {
-    int size_needed = WideCharToMultiByte(CP_UTF8, 0, wstr.c_str(), (int)wstr.size(), nullptr, 0, nullptr, nullptr);
+std::string wstringToString(const std::wstring& wstr) {
+    if (wstr.empty()) {
+        return std::string();
+    }
+
+    int size_needed = WideCharToMultiByte(CP_UTF8, 0, wstr.data(), (int)wstr.size(),
+        nullptr, 0, nullptr, nullptr);
+
     std::string str(size_needed, 0);
-    WideCharToMultiByte(CP_UTF8, 0, wstr.c_str(), (int)wstr.size(), &str[0], size_needed, nullptr, nullptr);
+    WideCharToMultiByte(CP_UTF8, 0, wstr.data(), (int)wstr.size(),
+        &str[0], size_needed, nullptr, nullptr);
+
     return str;
+}
+
+bool BAMParser::VerifyFileViaCatalog(LPCWSTR filePath)
+{
+    HANDLE hCatAdmin = NULL;
+    if (!CryptCATAdminAcquireContext(&hCatAdmin, NULL, 0))
+        return false;
+
+    HANDLE hFile = CreateFileW(filePath, GENERIC_READ, FILE_SHARE_READ, NULL, OPEN_EXISTING, 0, NULL);
+    if (hFile == INVALID_HANDLE_VALUE)
+    {
+        CryptCATAdminReleaseContext(hCatAdmin, 0);
+        return false;
+    }
+
+    DWORD dwHashSize = 0;
+    if (!CryptCATAdminCalcHashFromFileHandle(hFile, &dwHashSize, NULL, 0))
+    {
+        CloseHandle(hFile);
+        CryptCATAdminReleaseContext(hCatAdmin, 0);
+        return false;
+    }
+
+    BYTE* pbHash = new BYTE[dwHashSize];
+    if (!CryptCATAdminCalcHashFromFileHandle(hFile, &dwHashSize, pbHash, 0))
+    {
+        delete[] pbHash;
+        CloseHandle(hFile);
+        CryptCATAdminReleaseContext(hCatAdmin, 0);
+        return false;
+    }
+
+    CloseHandle(hFile);
+
+    CATALOG_INFO catInfo = { 0 };
+    catInfo.cbStruct = sizeof(catInfo);
+
+    HANDLE hCatInfo = CryptCATAdminEnumCatalogFromHash(hCatAdmin, pbHash, dwHashSize, 0, NULL);
+    bool isCatalogSigned = false;
+
+    while (hCatInfo && CryptCATCatalogInfoFromContext(hCatInfo, &catInfo, 0))
+    {
+        WINTRUST_CATALOG_INFO wtc = {};
+        wtc.cbStruct = sizeof(wtc);
+        wtc.pcwszCatalogFilePath = catInfo.wszCatalogFile;
+        wtc.pbCalculatedFileHash = pbHash;
+        wtc.cbCalculatedFileHash = dwHashSize;
+        wtc.pcwszMemberFilePath = filePath;
+
+        WINTRUST_DATA wtd = {};
+        wtd.cbStruct = sizeof(wtd);
+        wtd.dwUnionChoice = WTD_CHOICE_CATALOG;
+        wtd.pCatalog = &wtc;
+        wtd.dwUIChoice = WTD_UI_NONE;
+        wtd.fdwRevocationChecks = WTD_REVOKE_NONE;
+        wtd.dwProvFlags = 0;
+        wtd.dwStateAction = WTD_STATEACTION_VERIFY;
+
+        GUID action = WINTRUST_ACTION_GENERIC_VERIFY_V2;
+        LONG res = WinVerifyTrust(NULL, &action, &wtd);
+
+        wtd.dwStateAction = WTD_STATEACTION_CLOSE;
+        WinVerifyTrust(NULL, &action, &wtd);
+
+        if (res == ERROR_SUCCESS)
+        {
+            isCatalogSigned = true;
+            break;
+        }
+        hCatInfo = CryptCATAdminEnumCatalogFromHash(hCatAdmin, pbHash, dwHashSize, 0, &hCatInfo);
+    }
+
+    if (hCatInfo)
+        CryptCATAdminReleaseCatalogContext(hCatAdmin, hCatInfo, 0);
+
+    CryptCATAdminReleaseContext(hCatAdmin, 0);
+    delete[] pbHash;
+
+    return isCatalogSigned;
 }
 
 std::wstring BAMParser::CheckDigitalSignature(const std::wstring& filePath) {
@@ -62,15 +152,20 @@ std::wstring BAMParser::CheckDigitalSignature(const std::wstring& filePath) {
             }
         }
     }
-
+    else {
+        if (VerifyFileViaCatalog(filePath.c_str())) {
+            return L"Signed";
+        }
+    }
     // Cleanup
     winTrustData.dwStateAction = WTD_STATEACTION_CLOSE;
     WinVerifyTrust(NULL, &guidAction, &winTrustData);
 
     return result;
 }
-std::vector<FILETIME> BAMParser::GetInteractiveLogonSessions() {
-    std::vector<FILETIME> sessions;
+
+std::vector<LogonSessionInfo> BAMParser::GetInteractiveLogonSessions() {
+    std::vector<LogonSessionInfo> sessions;
     ULONG logonSessionCount = 0;
     PLUID logonSessionList = NULL;
 
@@ -85,13 +180,16 @@ std::vector<FILETIME> BAMParser::GetInteractiveLogonSessions() {
         if (status == STATUS_SUCCESS && sessionData != NULL) {
             if (sessionData->LogonType == Interactive ||
                 sessionData->LogonType == RemoteInteractive) {
-                FILETIME logonTime;
-                logonTime.dwLowDateTime = sessionData->LogonTime.LowPart;
-                logonTime.dwHighDateTime = sessionData->LogonTime.HighPart;
+                LogonSessionInfo info;
 
-                FILETIME localLogonTime;
-                FileTimeToLocalFileTime(&logonTime, &localLogonTime);
-                sessions.push_back(localLogonTime);
+                FILETIME utcLogonTime;
+                utcLogonTime.dwLowDateTime = sessionData->LogonTime.LowPart;
+                utcLogonTime.dwHighDateTime = sessionData->LogonTime.HighPart;
+
+                info.logonTime = utcLogonTime;
+                info.sessionId = sessionData->Session;
+                info.isInteractive = true;
+                sessions.push_back(info);
             }
             LsaFreeReturnBuffer(sessionData);
         }
@@ -99,6 +197,55 @@ std::vector<FILETIME> BAMParser::GetInteractiveLogonSessions() {
 
     LsaFreeReturnBuffer(logonSessionList);
     return sessions;
+}
+
+bool BAMParser::IsValidTimeFormat(const std::wstring& timeStr) {
+    if (timeStr.length() != 19) return false;
+    std::wistringstream ss(timeStr);
+    std::tm tm = {};
+    ss >> std::get_time(&tm, L"%Y-%m-%d %H:%M:%S");
+    return !ss.fail();
+}
+
+FILETIME BAMParser::StringToFileTimeUTC(const std::wstring& timeStr) {
+    std::wistringstream ss(timeStr);
+    std::tm tm = {};
+    ss >> std::get_time(&tm, L"%Y-%m-%d %H:%M:%S");
+
+    SYSTEMTIME localSt = {
+        (WORD)(tm.tm_year + 1900),
+        (WORD)(tm.tm_mon + 1),
+        (WORD)tm.tm_wday,
+        (WORD)tm.tm_mday,
+        (WORD)tm.tm_hour,
+        (WORD)tm.tm_min,
+        (WORD)tm.tm_sec,
+        0
+    };
+
+    SYSTEMTIME utcSt;
+    TzSpecificLocalTimeToSystemTime(NULL, &localSt, &utcSt);
+
+    FILETIME ftUTC;
+    SystemTimeToFileTime(&utcSt, &ftUTC);
+    return ftUTC;
+}
+
+std::wstring BAMParser::FileTimeToStringLocal(const FILETIME& ft) {
+    FILETIME localFt;
+    FileTimeToLocalFileTime(&ft, &localFt);
+    SYSTEMTIME st;
+    FileTimeToSystemTime(&localFt, &st);
+
+    std::wostringstream oss;
+    oss << std::setfill(L'0')
+        << st.wYear << L"-"
+        << std::setw(2) << st.wMonth << L"-"
+        << std::setw(2) << st.wDay << L" "
+        << std::setw(2) << st.wHour << L":"
+        << std::setw(2) << st.wMinute << L":"
+        << std::setw(2) << st.wSecond;
+    return oss.str();
 }
 
 bool BAMParser::IsInCurrentInstance(const std::wstring& execTime) {
@@ -111,51 +258,20 @@ bool BAMParser::IsInCurrentInstance(const std::wstring& execTime) {
         return false;
     }
 
-    FILETIME oldestSession = *std::min_element(sessions.begin(), sessions.end(),
-        [](const FILETIME& a, const FILETIME& b) {
-            return CompareFileTime(&a, &b) < 0;
+    auto oldestSession = std::min_element(sessions.begin(), sessions.end(),
+        [](const LogonSessionInfo& a, const LogonSessionInfo& b) {
+            return CompareFileTime(&a.logonTime, &b.logonTime) < 0;
         });
 
-    SYSTEMTIME currentSysTime;
-    GetLocalTime(&currentSysTime);
+    SYSTEMTIME utcCurrentSysTime;
+    GetSystemTime(&utcCurrentSysTime);
     FILETIME currentTime;
-    SystemTimeToFileTime(&currentSysTime, &currentTime);
+    SystemTimeToFileTime(&utcCurrentSysTime, &currentTime);
 
-    FILETIME execFt = StringToFileTime(execTime);
+    FILETIME execFt = StringToFileTimeUTC(execTime);
 
-    return (CompareFileTime(&execFt, &oldestSession) >= 0 &&
+    return (CompareFileTime(&execFt, &oldestSession->logonTime) >= 0 &&
         CompareFileTime(&execFt, &currentTime) <= 0);
-}
-
-bool BAMParser::IsValidTimeFormat(const std::wstring& timeStr) {
-    if (timeStr.length() != 19) return false;
-    std::wistringstream ss(timeStr);
-    std::tm tm = {};
-    ss >> std::get_time(&tm, L"%Y-%m-%d %H:%M:%S");
-    return !ss.fail();
-}
-
-FILETIME BAMParser::StringToFileTime(const std::wstring& timeStr) {
-    std::wistringstream ss(timeStr);
-    std::tm tm = {};
-    ss >> std::get_time(&tm, L"%Y-%m-%d %H:%M:%S");
-
-    SYSTEMTIME st = {
-        (WORD)(tm.tm_year + 1900),
-        (WORD)(tm.tm_mon + 1),
-        (WORD)tm.tm_wday,
-        (WORD)tm.tm_mday,
-        (WORD)tm.tm_hour,
-        (WORD)tm.tm_min,
-        (WORD)tm.tm_sec,
-        0
-    };
-
-    FILETIME ft;
-    SystemTimeToFileTime(&st, &ft);
-    FILETIME localFt;
-    FileTimeToLocalFileTime(&ft, &localFt);
-    return localFt;
 }
 
 std::wstring BAMParser::ConvertHardDiskVolumeToLetter(const std::wstring& path) {
@@ -187,28 +303,12 @@ std::wstring BAMParser::ConvertHardDiskVolumeToLetter(const std::wstring& path) 
     return L"?:";
 }
 
-FILETIME BAMParser::ConvertToLocalFileTime(const FILETIME& ft) {
-    FILETIME localFt;
-    ::FileTimeToLocalFileTime(&ft, &localFt);
-    return localFt;
-}
-
-std::wstring BAMParser::FileTimeToString(const FILETIME& ft) {
-    SYSTEMTIME st;
-    FileTimeToSystemTime(&ft, &st);
-
-    std::wostringstream oss;
-    oss << std::setfill(L'0')
-        << st.wYear << L"-"
-        << std::setw(2) << st.wMonth << L"-"
-        << std::setw(2) << st.wDay << L" "
-        << std::setw(2) << st.wHour << L":"
-        << std::setw(2) << st.wMinute << L":"
-        << std::setw(2) << st.wSecond;
-    return oss.str();
-}
-
 void BAMParser::Parse() {
+    if (!ReplaceScanner::init()) {
+        std::cerr << "Failed to initialize ReplaceParser." << std::endl;
+        return;
+    }
+
     HKEY hKey;
     const wchar_t* keyPath = L"SYSTEM\\CurrentControlSet\\Services\\bam\\State\\UserSettings";
 
@@ -216,6 +316,7 @@ void BAMParser::Parse() {
 
     if (RegOpenKeyExW(HKEY_LOCAL_MACHINE, keyPath, 0, KEY_READ, &hKey) != ERROR_SUCCESS) {
         std::wcout << L"Failed to open BAM key\n";
+        ReplaceScanner::destroy();
         return;
     }
 
@@ -224,6 +325,7 @@ void BAMParser::Parse() {
         nullptr, nullptr, nullptr, nullptr, nullptr, nullptr) != ERROR_SUCCESS) {
         RegCloseKey(hKey);
         std::wcout << L"Failed to query BAM key info\n";
+        ReplaceScanner::destroy();
         return;
     }
 
@@ -265,19 +367,25 @@ void BAMParser::Parse() {
                                     }
 
                                     FILETIME* ft = reinterpret_cast<FILETIME*>(valueData);
-                                    FILETIME localFt = ConvertToLocalFileTime(*ft);
+                                    std::wstring execLocalStr = FileTimeToStringLocal(*ft);
 
                                     BAMEntry entry;
                                     entry.path = path;
-                                    entry.executionTime = FileTimeToString(localFt);
+                                    entry.executionTime = execLocalStr;
                                     entry.signatureStatus = CheckDigitalSignature(path);
                                     entry.isInCurrentInstance = IsInCurrentInstance(entry.executionTime);
+
                                     if (entry.signatureStatus != L"Signed" && entry.signatureStatus != L"Deleted") {
-                                        std::vector<std::string> matched_rules;
-                                        if (scan_with_yara(wstringToString(path), matched_rules)) {
-                                            entry.matched_rules = matched_rules;
+                                        if (scan_with_yara(wstringToString(path), entry.matched_rules)) {
+                                            // be happy (idk why its a if!)
                                         }
                                     }
+
+                                    auto result = ReplaceScanner::scan(wstringToString(path));
+                                    if (!result.empty()) {
+                                        entry.replace_results = result;
+                                    }
+                                    
                                     entries.push_back(entry);
                                 }
                             }
@@ -289,4 +397,5 @@ void BAMParser::Parse() {
         }
     }
     RegCloseKey(hKey);
+    ReplaceScanner::destroy();
 }
