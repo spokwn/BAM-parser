@@ -1,6 +1,5 @@
 #include "yara.h"
 #include <yara/yara.h>
-#include "xor.h"
 
 void addGenericRule(const std::string& name, const std::string& rule) {
     genericRules.push_back({ name, rule });
