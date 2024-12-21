@@ -5,7 +5,7 @@ Retrieves the paths and last execution time from the **BAM** artefact.
 ## What does it do?
 
 - Parses the paths from the executed files on the BAM regedit key.
-- Corrects the path from the format "\Device\HarddiskVolume<number>\" to the disk letter.
+- Corrects the path from the format `\Device\HarddiskVolume<number>\` to the disk letter.
 - Gets the last run time of the file.
 - Gets if a the file was run in the last user's logon instance.
 - Performs digital signature checks for each file present.
