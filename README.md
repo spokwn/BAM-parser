@@ -39,16 +39,9 @@ Retrieves the paths and last execution time from the **BAM** artefact.
 21. **Generic G**: Advanced generic detection for suspicious injector executables.
 22. **Generic G2**: Advanced generic detection for suspicious injector executables.
 23. **Generic G3**: Advanced generic detection for suspicious injector executables.
-24. **Generic G4**: Advanced generic detection for suspicious injector executables.
-25. **Generic G5**: Advanced generic detection for suspicious injector executables.
-26. **Generic G6**: Advanced generic detection for suspicious injector executables.
-27. **Generic G7**: Advanced generic detection for suspicious PE injector executables.
-28. **Generic G8**: Advanced generic detection for suspicious PE injector executables.
-29. **Generic G9**: Advanced generic detection for suspicious injector executables.
-30. **Generic G10**: Advanced generic detection for suspicious injector executables.
-31. **Generic G11**: Advanced generic detection for suspicious injector executables.
-32. **Specific A**: Detects some free cheats using strings, this cheats are mostly the ones who didnt flag any generic at some point.
-33. **Specific B**: Detects some paid cheats using advanced methods, it currently just detects 2, but aren't needed as generic already detected them.
+24. **Generic G4**: Advanced generic detection for suspicious injector executables
+25. **Specific A**: Detects some free cheats using strings, this cheats are mostly the ones who didnt flag any generic at some point.
+26. **Specific B**: Detects some paid cheats using advanced methods, it currently just detects 2, but aren't needed as generic already detected them.
 
 Note: All generics should be relatively safe, but don't panic if they trigger. A2 and F generics may cause occasional "false flags", which are not intended to be fixed to maintain detection of real cheats, though they were improved lately.
 
