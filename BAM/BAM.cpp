@@ -110,7 +110,7 @@ std::wstring BAMParser::CheckDigitalSignature(const std::wstring& filePath) {
 
     WINTRUST_FILE_INFO fileInfo;
     ZeroMemory(&fileInfo, sizeof(fileInfo));
-    fileInfo.cbStruct = sizeof(WINTRUST_FILE_INFO);
+    fileInfo.cbStruct = sizeof(fileInfo);
     fileInfo.pcwszFilePath = filePath.c_str();
 
     GUID guidAction = WINTRUST_ACTION_GENERIC_VERIFY_V2;
@@ -135,18 +135,56 @@ std::wstring BAMParser::CheckDigitalSignature(const std::wstring& filePath) {
             if (pProvSigner) {
                 CRYPT_PROVIDER_CERT* pProvCert = WTHelperGetProvCertFromChain(pProvSigner, 0);
                 if (pProvCert && pProvCert->pCert) {
-                    char subjectName[256];
-                    CertNameToStrA(pProvCert->pCert->dwCertEncodingType,
-                        &pProvCert->pCert->pCertInfo->Subject,
-                        CERT_X500_NAME_STR,
-                        subjectName,
-                        sizeof(subjectName));
-                    std::string subject(subjectName);
-                    std::transform(subject.begin(), subject.end(), subject.begin(), ::tolower);
+                    {
+                        char subjectName[256];
+                        CertNameToStrA(pProvCert->pCert->dwCertEncodingType,
+                            &pProvCert->pCert->pCertInfo->Subject,
+                            CERT_X500_NAME_STR,
+                            subjectName,
+                            sizeof(subjectName));
+                        std::string subject(subjectName);
+                        std::transform(subject.begin(), subject.end(), subject.begin(), ::tolower);
+                        if (subject.find("manthe industries, llc") != std::string::npos ||
+                            subject.find("slinkware") != std::string::npos) {
+                            result = L"Cheat Signature";
+                        }
+                    }
+                    PCCERT_CONTEXT pCert = pProvCert->pCert;
 
-                    if (subject.find("manthe industries, llc") != std::string::npos ||
-                        subject.find("slinkware") != std::string::npos) {
-                        result = L"Not signed";
+                    DWORD hashSize = 0;
+                    if (CertGetCertificateContextProperty(pCert, CERT_SHA1_HASH_PROP_ID, nullptr, &hashSize)) {
+                        std::vector<BYTE> hash(hashSize);
+                        if (CertGetCertificateContextProperty(pCert, CERT_SHA1_HASH_PROP_ID, hash.data(), &hashSize)) {
+                            CRYPT_HASH_BLOB hashBlob;
+                            hashBlob.cbData = hashSize;
+                            hashBlob.pbData = hash.data();
+
+                            HCERTSTORE hStore = CertOpenStore(
+                                CERT_STORE_PROV_SYSTEM_W,
+                                X509_ASN_ENCODING | PKCS_7_ASN_ENCODING,
+                                NULL,
+                                CERT_SYSTEM_STORE_CURRENT_USER | CERT_STORE_OPEN_EXISTING_FLAG,
+                                L"Root"
+                            );
+
+                            if (hStore) {
+                                PCCERT_CONTEXT foundCert = CertFindCertificateInStore(
+                                    hStore,
+                                    pCert->dwCertEncodingType,
+                                    0,
+                                    CERT_FIND_SHA1_HASH,
+                                    &hashBlob,
+                                    NULL
+                                );
+
+                                if (foundCert) {
+                                    result = L"Fake Signature";
+                                    CertFreeCertificateContext(foundCert);
+                                }
+
+                                CertCloseStore(hStore, 0);
+                            }
+                        }
                     }
                 }
             }
@@ -157,46 +195,11 @@ std::wstring BAMParser::CheckDigitalSignature(const std::wstring& filePath) {
             return L"Signed";
         }
     }
-    // Cleanup
+
     winTrustData.dwStateAction = WTD_STATEACTION_CLOSE;
     WinVerifyTrust(NULL, &guidAction, &winTrustData);
 
     return result;
-}
-
-std::vector<LogonSessionInfo> BAMParser::GetInteractiveLogonSessions() {
-    std::vector<LogonSessionInfo> sessions;
-    ULONG logonSessionCount = 0;
-    PLUID logonSessionList = NULL;
-
-    NTSTATUS status = LsaEnumerateLogonSessions(&logonSessionCount, &logonSessionList);
-    if (status != STATUS_SUCCESS) {
-        return sessions;
-    }
-
-    for (ULONG i = 0; i < logonSessionCount; i++) {
-        PSECURITY_LOGON_SESSION_DATA sessionData = NULL;
-        status = LsaGetLogonSessionData(&logonSessionList[i], &sessionData);
-        if (status == STATUS_SUCCESS && sessionData != NULL) {
-            if (sessionData->LogonType == Interactive ||
-                sessionData->LogonType == RemoteInteractive) {
-                LogonSessionInfo info;
-
-                FILETIME utcLogonTime;
-                utcLogonTime.dwLowDateTime = sessionData->LogonTime.LowPart;
-                utcLogonTime.dwHighDateTime = sessionData->LogonTime.HighPart;
-
-                info.logonTime = utcLogonTime;
-                info.sessionId = sessionData->Session;
-                info.isInteractive = true;
-                sessions.push_back(info);
-            }
-            LsaFreeReturnBuffer(sessionData);
-        }
-    }
-
-    LsaFreeReturnBuffer(logonSessionList);
-    return sessions;
 }
 
 bool BAMParser::IsValidTimeFormat(const std::wstring& timeStr) {
