@@ -186,47 +186,52 @@ void UI::Render() {
     }
 
     if (showDetailsPopup) {
-        ImGui::PushStyleColor(ImGuiCol_ModalWindowDimBg, ImVec4(0.0f, 0.0f, 0.0f, 0.6f));
-        ImGui::OpenPopup("Replace Details Modal");
+    ImGui::PushStyleColor(ImGuiCol_ModalWindowDimBg, ImVec4(0.0f, 0.0f, 0.0f, 0.6f));
+    ImGui::OpenPopup("Replace Details Modal");
 
-        ImVec2 center = ImGui::GetMainViewport()->GetCenter();
-        ImGui::SetNextWindowPos(center, ImGuiCond_Appearing, ImVec2(0.5f, 0.5f));
-        ImGui::SetNextWindowSize(ImVec2(800, 600));
+    ImVec2 center = ImGui::GetMainViewport()->GetCenter();
+    ImGui::SetNextWindowPos(center, ImGuiCond_Appearing, ImVec2(0.5f, 0.5f));
+    ImGui::SetNextWindowSize(ImVec2(800, 600));
 
-        if (ImGui::BeginPopupModal("Replace Details Modal", &showDetailsPopup,
-            ImGuiWindowFlags_NoResize |
-            ImGuiWindowFlags_NoMove |
-            ImGuiWindowFlags_NoSavedSettings)) {
+    if (ImGui::BeginPopupModal("Replace Details Modal", &showDetailsPopup,
+        ImGuiWindowFlags_NoResize |
+        ImGuiWindowFlags_NoMove |
+        ImGuiWindowFlags_NoSavedSettings)) {
 
-            ImGui::PushStyleVar(ImGuiStyleVar_WindowPadding, ImVec2(20, 20));
+        ImGui::PushStyleVar(ImGuiStyleVar_WindowPadding, ImVec2(20, 20));
 
-            ImGui::Text("Replace Information:");
+        ImGui::Text("Replace Information:");
+        ImGui::Spacing();
+        ImGui::Spacing();
+
+        // reverse iteration so it shows up latest first
+        for (auto it = selectedEntry.replace_results.rbegin();
+            it != selectedEntry.replace_results.rend(); ++it) {
+            const auto& replace = *it;
+
+            ImGui::PushStyleColor(ImGuiCol_Text, ImVec4(1.0f, 0.0f, 0.0f, 1.0f));
+
+            ImGui::Text("Type:");
+            ImGui::SameLine();
+            ImGui::TextWrapped("%s", replace.replaceType.c_str());
+
             ImGui::Spacing();
+
+            ImGui::Text("Details:");
+            ImGui::SameLine();
+            ImGui::TextWrapped("%s", replace.details.c_str());
+
+            ImGui::PopStyleColor();
+            ImGui::Separator();
             ImGui::Spacing();
-
-            for (const auto& replace : selectedEntry.replace_results) {
-                ImGui::PushStyleColor(ImGuiCol_Text, ImVec4(1.0f, 0.0f, 0.0f, 1.0f));
-
-                ImGui::Text("Type:");
-                ImGui::SameLine();
-                ImGui::TextWrapped("%s", replace.replaceType.c_str());
-
-                ImGui::Spacing();
-
-                ImGui::Text("Details:");
-                ImGui::SameLine();
-                ImGui::TextWrapped("%s", replace.details.c_str());
-
-                ImGui::PopStyleColor();
-                ImGui::Separator();
-                ImGui::Spacing();
-            }
-            ImGui::PopStyleVar();
-            ImGui::EndPopup();
         }
 
-        ImGui::PopStyleColor();
+        ImGui::PopStyleVar();
+        ImGui::EndPopup();
     }
+
+    ImGui::PopStyleColor();
+}
 
 
 
