@@ -258,10 +258,7 @@ bool BAMParser::IsInCurrentInstance(const std::wstring& execTime) {
         return false;
     }
 
-    auto oldestSession = std::min_element(sessions.begin(), sessions.end(),
-        [](const LogonSessionInfo& a, const LogonSessionInfo& b) {
-            return CompareFileTime(&a.logonTime, &b.logonTime) < 0;
-        });
+    const LogonSessionInfo& firstSession = sessions.front();
 
     SYSTEMTIME utcCurrentSysTime;
     GetSystemTime(&utcCurrentSysTime);
@@ -270,9 +267,10 @@ bool BAMParser::IsInCurrentInstance(const std::wstring& execTime) {
 
     FILETIME execFt = StringToFileTimeUTC(execTime);
 
-    return (CompareFileTime(&execFt, &oldestSession->logonTime) >= 0 &&
+    return (CompareFileTime(&execFt, &firstSession.logonTime) >= 0 &&
         CompareFileTime(&execFt, &currentTime) <= 0);
 }
+
 
 std::wstring BAMParser::ConvertHardDiskVolumeToLetter(const std::wstring& path) {
     wchar_t drives[MAX_PATH];
