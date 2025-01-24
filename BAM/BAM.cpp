@@ -145,7 +145,8 @@ std::wstring BAMParser::CheckDigitalSignature(const std::wstring& filePath) {
                         std::string subject(subjectName);
                         std::transform(subject.begin(), subject.end(), subject.begin(), ::tolower);
                         if (subject.find("manthe industries, llc") != std::string::npos ||
-                            subject.find("slinkware") != std::string::npos) {
+                            subject.find("slinkware") != std::string::npos              ||
+                            subject.find("amstion limited") != std::string::npos) {
                             result = L"Cheat Signature";
                         }
                     }
